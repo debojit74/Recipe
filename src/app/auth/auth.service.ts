@@ -1,50 +1,79 @@
-import { Router } from '@angular/router';
-import * as firebase from 'firebase';
 import { Injectable } from '@angular/core';
+import { HttpClient, HttpErrorResponse, HttpHandler } from '@angular/common/http';
+import { catchError, tap } from 'rxjs/operators';
+import { throwError, BehaviorSubject } from 'rxjs';
+import { User } from './user.model';
 
-@Injectable()
+export interface AuthResponseData {
+  kind: string;
+  idToken: string;
+  email: string;
+  refreshToken: string;
+  expiresIn: string;
+  localId: string;
+  registered?: string;
+}
+
+@Injectable({ providedIn: 'root' })
 export class AuthService {
-  token: string;
+  user = new BehaviorSubject<User>(null);
 
-  constructor(private router: Router) {}
+  constructor(private http: HttpClient) {}
 
-  signupUser(email: string, password: string) {
-    firebase.auth().createUserWithEmailAndPassword(email, password)
-      .catch(
-        error => console.log(error)
-      )
-  }
-
-  signinUser(email: string, password: string) {
-    firebase.auth().signInWithEmailAndPassword(email, password)
-      .then(
-        response => {
-          this.router.navigate(['/']);
-          firebase.auth().currentUser.getIdToken()
-            .then(
-              (token: string) => this.token = token
-            )
+  signup(email: string, password: string) {
+    return this.http
+      .post<AuthResponseData>(
+        'https://www.googleapis.com/identitytoolkit/v3/relyingparty/signupNewUser?key=AIzaSyA2GoaStXzW5CBQK97ApAABqXTdAMf3WDw',
+        {
+          email: email,
+          password: password,
+          returnSecureToken: true
         }
       )
-      .catch(
-        error => console.log(error)
-      );
+      .pipe(
+        catchError(this.handleError),
+        tap(resData => {
+          this.handleAuthentication(resData.email, resData.localId, resData.idToken, +resData.expiresIn);
+        }));
   }
 
-  logout() {
-    firebase.auth().signOut();
-    this.token = null;
+  login(email: string, password: string){
+    return this.http.post<AuthResponseData>('https://www.googleapis.com/identitytoolkit/v3/relyingparty/verifyPassword?key=AIzaSyA2GoaStXzW5CBQK97ApAABqXTdAMf3WDw',
+      {
+        email: email,
+        password: password,
+        returnSecureToken: true
+      }
+    ) 
+    .pipe(
+      catchError(this.handleError),
+      tap(resData => {
+        this.handleAuthentication(resData.email, resData.localId, resData.idToken, +resData.expiresIn);
+      }));
   }
 
-  getToken() {
-    firebase.auth().currentUser.getIdToken()
-      .then(
-        (token: string) => this.token = token
-      );
-    return this.token;
+  private handleAuthentication(email: string, userId: string, token: string, expiresIn: number){
+    const expirationDate = new Date(new Date().getTime() + expiresIn * 1000);
+    const user = new User(email, userId, token , expirationDate);
+    this.user.next(user);
   }
 
-  isAuthenticated() {
-    return this.token != null;
+  private handleError(errorRes: HttpErrorResponse){
+    let errorMessage = 'An unknown error occurred!';
+    if (!errorRes.error || !errorRes.error.error) {
+      return throwError(errorMessage);
+    }
+    switch (errorRes.error.error.message) {
+      case 'EMAIL_EXISTS':
+        errorMessage = 'This email exists already.';
+        break;
+      case 'EMAIL_NOT_FOUND ':
+        errorMessage = 'This email does not exists.';
+        break;
+      case 'INVALID_PASSWORD':
+        errorMessage = 'This password is not correct.';
+        break;
+    }
+    return throwError(errorMessage);
   }
 }
